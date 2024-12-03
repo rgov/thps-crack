@@ -17,7 +17,7 @@ SWIFTC = swiftc
 all: $(OUTPUT)
 
 $(OUTPUT): $(METAL_LIBRARY) $(SWIFT_FILES)
-	$(SWIFTC) -g -O -framework Metal -o $(OUTPUT) $(SWIFT_FILES)
+	$(SWIFTC) -O -framework Metal -o $(OUTPUT) $(SWIFT_FILES)
 
 $(METAL_LIBRARY): $(METAL_IR_FILES)
 	$(METALLIB) -o $(METAL_LIBRARY) $(METAL_IR_FILES)
