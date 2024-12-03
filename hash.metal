@@ -16,67 +16,88 @@ struct Parameters {
     uint64_t window_offset;    // Starting offset for this window in the search space
     uint32_t target_hash_1;    // First target hash value
     uint32_t target_hash_2;    // Second target hash value
-    uint8_t sequence_length;  // Length of sequences to generate
-    uint8_t  repetitions;      // Number of times to run the hash function
+    uint8_t max_length;        // Maximum sequence length to try
+};
+
+struct HashResult {
+    bool found;            // Whether a matching sequence was found
+    uint8_t length;        // Length of successful sequence
+    uint8_t sequence[32];  // Sequence that produces the target hashes
 };
 
 // Convert a position in the search space into a sequence of elements (0-7)
-void index_to_sequence(uint64_t index, thread uint8_t* sequence, uint32_t length) {
-    for (uint32_t i = 0; i < length; i++) {
+void index_to_sequence(uint64_t index, thread uint8_t* sequence, uint8_t length) {
+    for (uint8_t i = 0; i < length; i++) {
         sequence[i] = uint8_t(index % 8);
         index /= 8;
     }
 }
 
-struct HashPair {
-    uint32_t hash1;
-    uint32_t hash2;
-};
+bool check_hash2(uint32_t target_hash_2,
+                 thread const uint8_t* sequence,
+                 uint8_t length) {
 
-// Hash function that produces two different hash values
-HashPair hash_sequence(thread const uint8_t* sequence, uint8_t length, uint8_t repetitions) {
-    HashPair result = {0, 0};
+    // Some cheats only use a single hash
+    if (target_hash_2 == 0)
+        return true;
 
-    // Outer loop for repetitions
-    for (uint32_t rep = 0; rep < repetitions; rep++) {
-        // Inner loop over sequence elements
-        for (uint32_t i = 0; i < length; i++) {
-            uint32_t j = sequence[i];
+    uint32_t hash_1 = 0;
+    uint32_t hash_2 = 0;
 
-            uint32_t temp1 = result.hash1 ^ x[j];
-            result.hash1 = ((temp1 << 1) ^ (temp1 >> 31)) * 0x209;
+    for (uint8_t i = 0; i < length; i++) {
+        uint32_t temp1 = hash_1 ^ x[sequence[i]];
+        hash_1 = ((temp1 << 1) ^ (temp1 >> 31)) * 0x209;
+        uint32_t temp2 = hash_2 ^ y[sequence[i]] ^ (hash_1 >> 8);
+        hash_2 = (temp2 << 1) ^ ((hash_2 ^ y[sequence[i]]) >> 31);
+    }
 
-            uint32_t temp2 = result.hash2 ^ y[j] ^ (result.hash1 >> 8);
-            result.hash2 = (temp2 << 1) ^ ((result.hash2 ^ y[j]) >> 31);
+    return hash_2 == target_hash_2;
+}
+
+// Returns the length of the matching subsequence, or 0 if no match
+uint8_t check_hash(uint32_t target_hash_1, uint32_t target_hash_2,
+                   thread const uint8_t* sequence,
+                   uint8_t length) {
+
+    uint32_t hash_1 = 0;
+
+    for (uint8_t i = 0; i < length; i++) {
+        uint32_t temp1 = hash_1 ^ x[sequence[i]];
+        hash_1 = ((temp1 << 1) ^ (temp1 >> 31)) * 0x209;
+
+        if (hash_1 != target_hash_1)
+            continue;
+
+        // We have a collision with target_hash_1, do another loop to
+        // evaluate target_hash_2.
+        if (check_hash2(target_hash_2, sequence, i + 1)) {
+            return i + 1;  // Found it!
         }
     }
 
-    return result;
+    return 0;  // no match
 }
-
-struct HashResult {
-    bool found;            // Whether a matching sequence was found
-    uint8_t sequence[32];  // Sequence that produces the target hashes
-};
 
 kernel void search_preimage(
     device const Parameters& params [[buffer(0)]],
     device HashResult& result [[buffer(1)]],
-    uint thread_position_in_grid [[thread_position_in_grid]],
-    uint threads_per_grid [[threads_per_grid]]
+    uint thread_position_in_grid [[thread_position_in_grid]]
 ) {
     // Calculate the global index for this thread
     uint64_t global_index = params.window_offset + thread_position_in_grid;
 
     // Generate sequence for this thread
     uint8_t sequence[32];  // Local stack allocation for sequence
-    index_to_sequence(global_index, sequence, params.sequence_length);
+    index_to_sequence(global_index, sequence, params.max_length);
 
-    // Calculate both hashes with the specified number of repetitions
-    HashPair hashes = hash_sequence(sequence, params.sequence_length, params.repetitions);
+    uint8_t out_length = check_hash(
+        params.target_hash_1,
+        params.target_hash_2,
+        sequence,
+        params.max_length
+    );
 
-    // If we found a sequence that produces both target hashes
-    if (hashes.hash1 == params.target_hash_1 && hashes.hash2 == params.target_hash_2) {
+    if (out_length > 0) {
         bool expected = false;
         if (atomic_compare_exchange_weak_explicit(
             (volatile device atomic_bool*)&result.found,
@@ -85,10 +106,11 @@ kernel void search_preimage(
             memory_order_relaxed,
             memory_order_relaxed
         )) {
-            // Store the sequence that produced our target hashes
-            for (uint32_t i = 0; i < params.sequence_length; i++) {
+            // Return the successful sequence
+            for (uint32_t i = 0; i < out_length; i++) {
                 result.sequence[i] = sequence[i];
             }
+            result.length = out_length;
         }
     }
 }

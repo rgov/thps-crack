@@ -7,8 +7,7 @@ struct Parameters {
     var window_offset: UInt64
     var target_hash_1: UInt32
     var target_hash_2: UInt32
-    var sequence_length: UInt8
-    var repetitions: UInt8
+    var max_length: UInt8
 }
 
 typealias UInt8x32 = (  // swift sucks at fixed arrays!
@@ -20,6 +19,7 @@ typealias UInt8x32 = (  // swift sucks at fixed arrays!
 
 struct HashResult {
     var found: Bool
+    var length: UInt8
     var sequence: UInt8x32
 }
 
@@ -31,21 +31,18 @@ let MAX_WINDOW_SIZE = 65536 * 65536 - 1  // Adjust based on GPU capabilities
 // MARK: - Main Program
 
 // Parse command line arguments
-guard CommandLine.arguments.count == 7 else {
+guard CommandLine.arguments.count == 4 else {
     print(
-        "Usage: hash-search min_length max_length min_repetitions max_repetitions target_hash_1(hex) target_hash_2(hex)"
+        "Usage: hash-search max_length target_hash_1(hex) target_hash_2(hex)"
     )
     exit(1)
 }
 
-guard let minLength = UInt8(CommandLine.arguments[1]),
-    let maxLength = UInt8(CommandLine.arguments[2]),
-    let minRepetitions = UInt8(CommandLine.arguments[3]),
-    let maxRepetitions = UInt8(CommandLine.arguments[4]),
+guard let maxLength = UInt8(CommandLine.arguments[1]),
     let targetHash1 = UInt32(
-        CommandLine.arguments[5].replacingOccurrences(of: "0x", with: ""), radix: 16),
+        CommandLine.arguments[2].replacingOccurrences(of: "0x", with: ""), radix: 16),
     let targetHash2 = UInt32(
-        CommandLine.arguments[6].replacingOccurrences(of: "0x", with: ""), radix: 16)
+        CommandLine.arguments[3].replacingOccurrences(of: "0x", with: ""), radix: 16)
 else {
     print("Invalid arguments")
     exit(1)
@@ -77,35 +74,32 @@ let resultBuffer = device.makeBuffer(
 )!
 
 // Helper function to convert sequence to string
-func sequenceToString(_ sequence: UInt8x32, length: Int, repetitions: Int) -> String {
+func sequenceToString(_ sequence: UInt8x32, length: Int) -> String {
     let values = Mirror(reflecting: sequence).children.map { $0.value as! UInt8 }
-    let singleSequence = values[..<length].map { CHARSET[Int($0)] }.map(String.init).joined()
-    return String(repeating: singleSequence, count: repetitions)
+    return values[..<length].map { CHARSET[Int($0)] }.map(String.init).joined()
 }
 
-// Main search loop
-func searchLength(_ length: UInt8, repetitions: UInt8) -> Bool {
-    print("Searching sequences of length \(length) with \(repetitions) repetitions...")
+// Search function
+func search() -> Bool {
+    print("Searching sequences up to length \(maxLength)...")
     print()
 
-    let searchSpace = UInt64(1 << (3 * length))
+    // Calculate search space based on maximum length
+    let searchSpace = UInt64(1 << (3 * maxLength))  // 8^maxLength
     var windowOffset: UInt64 = 0
+
+    let resultPtr = resultBuffer.contents().assumingMemoryBound(to: HashResult.self)
+    let paramsPtr = paramsBuffer.contents().assumingMemoryBound(to: Parameters.self)
 
     while windowOffset < searchSpace {
         let windowSize = min(MAX_WINDOW_SIZE, Int(searchSpace - windowOffset))
 
-        // Clear previous result
-        let resultPtr = resultBuffer.contents().assumingMemoryBound(to: HashResult.self)
-        resultPtr.pointee.found = false
-
         // Update parameters
-        let paramsPtr = paramsBuffer.contents().assumingMemoryBound(to: Parameters.self)
         paramsPtr.pointee = Parameters(
             window_offset: windowOffset,
             target_hash_1: targetHash1,
             target_hash_2: targetHash2,
-            sequence_length: length,
-            repetitions: repetitions
+            max_length: maxLength
         )
 
         // Create and execute command buffer
@@ -136,7 +130,8 @@ func searchLength(_ length: UInt8, repetitions: UInt8) -> Bool {
             print("\u{1B}[1A\u{1B}[2K\rProgress: 100.00%")
 
             let sequence = sequenceToString(
-                resultPtr.pointee.sequence, length: Int(length), repetitions: Int(repetitions))
+                resultPtr.pointee.sequence,
+                length: Int(resultPtr.pointee.length))
             print("Found solution: \(sequence)")
 
             // Verify the hash
@@ -154,14 +149,8 @@ func searchLength(_ length: UInt8, repetitions: UInt8) -> Bool {
     return false
 }
 
-// Execute search for each combination of length and repetitions
-for length in minLength...maxLength {
-    for repetitions in minRepetitions...maxRepetitions {
-        if searchLength(length, repetitions: repetitions) {
-            exit(0)
-        }
-    }
+// Execute search
+if !search() {
+    print("Exhausted :(")
+    exit(1)
 }
-
-print("Exhausted :(")
-exit(1)

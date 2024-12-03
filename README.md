@@ -10,23 +10,16 @@ For example, in *Tony Hawk's Pro Skater 2*, to enable "mirror mode", the hashes 
 
 Bo discovered hash values for several previously-unknown cheat codes in *Tony Hawk's Pro Skater 2* and *3*. The challenge is figuring out what button combinations would generate these specific hash values.
 
-This repo contains a GPU-accelerated brute force program to try to uncover the remaining codes. The program uses Apple's Metal API and can be run on a macOS device:
+This repo contains a GPU-accelerated brute force program to try to uncover the remaining codes. The program uses Apple's Metal API and can be run on a Mac:
 
     $ make
-    $ time ./thpscrack 1 10 1 2 A3E2DCE2 7A6115CE
+    $ time ./thpscrack 10 A3E2DCE2 7A6115CE
     ...
     Found solution: UDLRTXSCUDLRTXSC
     Target hashes: 0xA3E2DCE2 0x7A6115CE
 
-The arguments are *minimum length*, *maximum length*, *minimum repetitions*, *maximum repetitions*. Repetitions are a way to quickly try longer button sequences from repeated subsequences (as above). The output uses PlayStation nomenclature, <kbd>T</kbd> = Triangle and so on.
+The first argument is maximum sequence length. The output uses PlayStation nomenclature, T for Triangle and so on.
 
-On a MacBook Pro with M1 Max it can search through 13-button sequences (that's 8^13 = 549.8  billion) in about 46 seconds.
+On a MacBook Pro with M1 Max it can search all 628.3 billion sequences of 1 to 13 buttons in about 2 minutes.
 
 The code was written through a back and forth with Claude 3.5 Sonnet.
-
-
-### Future enhancement
-
-We could save effort by calculating the first hash and then, only if it matches, calculating the second one.
-
-Repetitions should be processed on the GPU by running the hash-and-check procedure in a loop, rather than having the CPU submit more workloads.
